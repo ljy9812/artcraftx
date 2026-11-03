@@ -10,7 +10,9 @@ artcraftx（Tauri 应用，`crates/artcraftx`）在 OpenHarmony 真机（HAD-W24
 
 | 依赖 | 说明 |
 |---|---|
-| Tauri OHOS fork | 兄弟团队仓，checkout 到 `../../tauri-3.0`（相对本仓根），**只消费不修改**。根 `Cargo.toml` 的 `[patch.crates-io]` 15 条 path 重定向 + openh264-sys2 vendor 已按此写死 |
+| Tauri OHOS fork | 兄弟团队仓（GitHub `Eulogizethesun` 系十仓，外发分支统一 `ohdev-git`），**只消费不修改**。根 `Cargo.toml` 的 `[patch.crates-io]` 16 条 git 重定向 + openh264-sys2 vendor path——cargo 自动拉取，**无需本地 tauri 源码树**。内部提速备选：换回 path 指向 `../../tauri-3.0` checkout（版本面与 ohdev-git 分支完全一致） |
+| tauri-cli（OHOS 版） | `cargo install --git https://github.com/Eulogizethesun/tauri --branch ohdev-git --locked tauri-cli`（crates.io 发行版无 OHOS 支持） |
+| ohrs | `cargo install ohrs --version 1.3.1`（tauri-cli 内部调用它编 `.so`） |
 | DevEco Studio | SDK clang（`CC/CXX_aarch64_unknown_linux_ohos`）、NDK `libc++_shared.so`、libclang（bindgen 用） |
 | Node/Nx | 前端是 Nx monorepo（`frontend/`），需先构建 `frontend/apps/artcraft/dist` |
 | OHOS 签名物料 | DevEco auto-sign 产出的 p12/cer/p7b + 口令（本机 `.ohos/config/`，不入库） |
@@ -29,10 +31,21 @@ printf 'n\n' | npx nx run artcraft:build
 
 ## 本分支的源码改动（全量）
 
-1. **依赖挂载**（根 `Cargo.toml` + `Cargo.lock`）：`[patch.crates-io]` 15 条 → fork
-   （tauri 2.10.3 / tauri-build 2.5.6 / tauri-plugin 2.5.4 等）。
+1. **依赖挂载**（根 `Cargo.toml` + `Cargo.lock`）：`[patch.crates-io]` 16 条 → fork 的
+   `ohdev-git` 分支（git 依赖：tauri 2.10.3 / tauri-build 2.5.6 / tauri-plugin 2.5.4 /
+   wry 0.55.0 / tao 0.35.0 / muda 0.19.1 / tray-icon 0.24.0 / window-vibrancy 0.7.1 /
+   ability 1.0.0-beta.0 / dialog 2.7.1 等）+ openh264-sys2 vendor path 条目。
+   **git 依赖模式已真机端到端验证**（2026-11-03：无 TAURI_WORKSPACE_ROOT、无本地 tauri 树
+   全量构建 → 签名 HAP → 冷启/首屏/IPC 回环全过；fork 侧另有 examples/api 真机验证）。
    **锁漂移坑**：patch 生效与否不能靠 `cargo tree`，要 `grep -c '^\[\[patch.unused\]\]' Cargo.lock` = 0；
-   漂了就 `cargo update -p tauri` 整族翻转。
+   source 形态切换（path↔git）后 `cargo update -p tauri` 会报 "did not match any packages"
+   ——改用 `cargo fetch` 重写 lock 的 source 行（版本零漂移）。
+1a. **dialog 插件 HAR 入仓**（`crates/artcraftx/plugins/dialog/openharmony/`，6 文件）：
+   tauri-cli 找插件 OHOS HAR 只认三处——`<project_dir>/plugins/<name>/openharmony`（本方案）、
+   plugins-workspace 兄弟目录上溯、`TAURI_WORKSPACE_ROOT` 环境变量。git 依赖模式下后两处
+   不存在，dialog 的 HAR 拷入仓内即被自动发现；fs/log/upload/opener 无 OHOS HAR
+   （构建时 Warn 跳过，属预期）。@tauri/app HAR 不用操心——随 tauri crate 的
+   cargo git checkout 自动就位。
 2. **openh264-sys2 vendor**（`crates/vendor/openh264-sys2`）：thumbnails 无条件依赖
    openh264 → openh264-sys2，其 build.rs 的 `TargetEnv` 解析不认 `env="ohos"`（直接
    panic，无 feature 可关）。本仓 vendor 副本仅加一个 `"ohos" => TargetEnv::NoEnv`
@@ -47,6 +60,12 @@ printf 'n\n' | npx nx run artcraft:build
    `DesktopOnlyBuilderCompat` 给桌面专属 builder 方法提供 ohos 面空操作。
 7. **ohos deps**（`crates/artcraftx/Cargo.toml`）：`openharmony-ability` / `napi-ohos` /
    `napi-derive-ohos` + `ohos-hilog-binding`（redirect 特性）。
+   **坑**：`[target.'cfg(target_env = "ohos")'.dependencies]` 段必须放在文件里
+   **vendor 两行（`tauri-plugin-http` / `tauri-plugin-opener`）之后**——TOML 靠表头分段，
+   注释和空行不结束上一段；插在其前会把这两条 upstream 无条件依赖吞进 ohos 专属段，
+   host/desktop 构建面直接损坏（依赖不在图里 → capabilities 引用的 `http:*` / `opener:*`
+   权限解析不到 → app build.rs 报 "Permission http:allow-fetch not found"）。OHOS 面恰好
+   不触发（cfg 匹配），属「只在对照平台显形」型回归。
 8. **vendor 对齐**（`crates/vendor/tauri-plugin-http`）：tauri-plugin 2.5.4 对齐 + 权限
    schema 补 `openHarmony` 枚举值（重新自动生成）。
 9. `tauri.ohos.conf.json`：identifier `com.egui.device-spike`（codegen 转 bundleName
@@ -59,7 +78,7 @@ printf 'n\n' | npx nx run artcraft:build
 cd crates/artcraftx
 
 CI=true SQLX_OFFLINE=true CMAKE_GENERATOR=Ninja BORING_BSSL_RUST_CPPLIB=c++ \
-OHOS_DEVICE_TYPE=desktop TAURI_WORKSPACE_ROOT=<tauri-3.0 绝对路径> \
+OHOS_DEVICE_TYPE=desktop \
 LIBCLANG_PATH="<SDK>/openharmony/native/llvm/bin" \
 BINDGEN_EXTRA_CLANG_ARGS='-isystem "<SDK>/openharmony/native/llvm/lib/clang/15.0.4/include" -isystem "<SDK>/openharmony/native/sysroot/usr/include/aarch64-linux-ohos" -isystem "<SDK>/openharmony/native/sysroot/usr/include"' \
 CC_aarch64_unknown_linux_ohos="<SDK>/llvm/bin/clang.exe" \
@@ -98,23 +117,31 @@ libc++_shared.so`，OHOS 不随包提供 → 缺库 = 模块加载失败 = 白�
 HAP）。**不要**放 `entry_desktop/libs/`（构建被 `ohrs --dist` 同步删除）或 `dialog/libs/`
 （被 tauri-cli 重建删除）。首次构建创建 `gen/ohos/tauri` 后才能注入。
 
-### init 后必做的三处手工修正（gen/ 不入库，重建即重打）
+### init 后必做的手工修正（gen/ 不入库，重建即重打）
 
-1. **ability.har 路径**（`gen/ohos/entry_{desktop,mobile}/oh-package.json5`）：模板生成
-   `file:../../../../../../../openharmony-ability/ability.har`——7 级上溯到 `D:\xuqiu` 后
-   缺 `tauri-3.0/` 一段，正确值：
-   `file:../../../../../../../tauri-3.0/openharmony-ability/ability.har`。
-2. **摘除 READ_PASTEBOARD**（两份 `gen/ohos/entry_*/src/main/module.json5` + 可留残串）：
-   受限 ACL 权限，默认调试 profile 不放行 → 装机报 `9568289 grant request permissions
-   failed`。**根因是本机 `cargo-tauri.exe`（10-12 构建）内嵌的旧模板还带该条目**——fork
-   源码模板已改为「deliberately NOT declared」并附 README 指引，装的 CLI 二进制比源码
-   新。fork 侧不用动（只消费），init 后摘掉即可。
-3. `libc++_shared.so` 注入（见上节）。
+**用 ohdev-git 版 tauri-cli（§前置依赖的安装命令）init 时，只剩一处**：
+
+1. `libc++_shared.so` 注入（见上节）——fresh init 已实证（2026-11-03）：模板的
+   `gen/ohos/tauri/` HAR 模块不带 `libs/`，注入点仍需手工创建。
+
+两处旧坑在 ohdev-git CLI（`46a19d8d` 起）已由模板根治，**新 init 不需要再做**：
+
+- ~~ability.har 路径~~：模板改为 OHPM registry 形态 `@ylong-rs/ohrs-ability: 1.0.0-beta.1`
+  （不再生成断链的 7 级 `file:` 相对路径；构建时 ohpm 从 registry 拉取）。
+- ~~摘除 READ_PASTEBOARD~~：模板 `module.json5` 的 `requestPermissions` 已只剩
+  INTERNET / SET_WINDOW_TRANSPARENT / WINDOW_TOPMOST / LOCK_WINDOW_CURSOR / PRINT，
+  装机不再报 `9568289`。
+
+仅当 `cargo install --list` 显示的 tauri-cli 来源**不是** `Eulogizethesun/tauri`（git）时
+（crates.io 版或 10 月前的旧二进制），才会踩回这两坑：路径断链手工改
+`file:` 指向本地 `openharmony-ability/ability.har`、`module.json5` 手工摘
+READ_PASTEBOARD——换装 §前置依赖的 ohdev-git CLI 重新 init 即消除。
 
 ## 真机验证
 
 `verify-launch.ps1`（仓根）：`bm uninstall -n` → `hdc install` → `hilog -r` → `aa start` →
-pidof → hilog 启动链 → faultlog 检查 → `snapshot_display` 截图。判据（2026-11-03 全过）：
+pidof → hilog 启动链 → faultlog 检查 → `snapshot_display` 截图。判据（2026-11-03 全过；
+同日转 ohdev-git git 依赖后同套复验全过，OnFirstScreenPaint 1162ms）：
 
 - 冷启（`onCreate` 非 `onNewWant`）+ pid 存活 + `:gpu`/`:render` 子进程、无新 cppcrash
 - hilog `RustStdoutStderr`：`OHOS filesDir base:` → `NativeAbility onCreate` →
