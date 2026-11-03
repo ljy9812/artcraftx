@@ -2,6 +2,7 @@ use artcraft_client::utils::api_host::ApiHost;
 use crate::state::data_dir::app_data_root::AppDataRoot;
 use crate::services::storyteller::state::storyteller_credential_manager::StorytellerCredentialManager;
 use crate::services::storyteller::windows::storyteller_billing_window_thread::storyteller_billing_window_thread;
+use crate::utils::ohos_compat::DesktopOnlyBuilderCompat; // mobile/ohos 面窗口 builder 垫片
 use anyhow::anyhow;
 use artcraft_client::api_defs::stripe_artcraft::create_credits_pack_checkout::StripeArtcraftCreateCreditsPackCheckoutRequest;
 use artcraft_client::api_defs::stripe_artcraft::create_subscription_checkout::{PlanBillingCadence, StripeArtcraftCreateSubscriptionCheckoutRequest};

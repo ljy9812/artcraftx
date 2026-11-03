@@ -40,6 +40,14 @@ pub async fn open_local_file_command(
     return Err("file not found".into());
   }
 
+  // NB: OHOS fork 的 opener `open_path` / `reveal_item_in_dir` 为 async（桌面/移动面
+  // 同步，上游 2.6 起同步化）——两面都要编译，按面拆分。
+  #[cfg(target_env = "ohos")]
+  let result = match mode {
+    OpenLocalFileMode::Open => app.opener().open_path(&path, None::<&str>).await,
+    OpenLocalFileMode::Reveal => app.opener().reveal_item_in_dir(file).await,
+  };
+  #[cfg(not(target_env = "ohos"))]
   let result = match mode {
     OpenLocalFileMode::Open => app.opener().open_path(&path, None::<&str>),
     OpenLocalFileMode::Reveal => app.opener().reveal_item_in_dir(file),

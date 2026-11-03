@@ -61,7 +61,12 @@ pub async fn handle_request(
       .ok_or_else(|| anyhow!("Download directory path isn't valid UTF-8: {:?}", download_directory))?
       .to_string();
 
-  app.opener().open_path(download_directory, None::<&str>)
+  // NB: OHOS fork 的 opener `open_path` 为 async（其他面同步），按面拆分。
+  #[cfg(target_env = "ohos")]
+  let open_result = app.opener().open_path(download_directory, None::<&str>).await;
+  #[cfg(not(target_env = "ohos"))]
+  let open_result = app.opener().open_path(download_directory, None::<&str>);
+  open_result
       .map_err(|err| anyhow!("Failed to open directory: {:?}", err))?;
 
   Ok(())

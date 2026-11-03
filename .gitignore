@@ -18,3 +18,7 @@ secrets/
 
 # Python virtual envs (named by convention)
 venv/
+
+# OHOS Tauri adaptation (ohos-tauri branch)
+crates/artcraftx/gen/
+crates/artcraftx/tauri.ohos.conf.local.json
