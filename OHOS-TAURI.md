@@ -2,15 +2,20 @@
 
 artcraftx（Tauri 应用，`crates/artcraftx`）在 OpenHarmony 真机（HAD-W24 鸿蒙 PC）上运行的
 适配分支。**真机首启链已贯通**：前端构建 → `cargo tauri ohos init` → HAP 构建+签名 → 装机
-→ 启动 → 首屏渲染（深色工作台 UI 完整呈现）+ 前端 IPC 回环（`get_app_info_command`）。
+→ 启动 → 首屏渲染（深色工作台 UI 完整呈现）+ 前端 IPC 回环（`get_app_*_command`）+
+主窗关闭干净退出。
 
 配方与 artcraft 仓 `ohos-tauri` 分支同源（1:1 迁移 + 本仓特有差异，下文以差异为主）。
+
+> 2026-11-09 重锁 fork `ohdev-git` 至 `73bffac6f`（自 `46a19d8d`）并全链重验：
+> HAP 双 `.so` 齐、冷启/首屏（OnFirstScreenPaint 1552ms）/IPC 回环/关闭退出链全过。
+> fork 新增 `sync_ohos_tauri_module`（libc++ 注入通道变更，见下）与主窗 close 修复。
 
 ## 前置依赖
 
 | 依赖 | 说明 |
 |---|---|
-| Tauri OHOS fork | 兄弟团队仓（GitHub `Eulogizethesun` 系十仓，外发分支统一 `ohdev-git`），**只消费不修改**。根 `Cargo.toml` 的 `[patch.crates-io]` 16 条 git 重定向 + openh264-sys2 vendor path——cargo 自动拉取，**无需本地 tauri 源码树**。内部提速备选：换回 path 指向 `../../tauri-3.0` checkout（版本面与 ohdev-git 分支完全一致） |
+| Tauri OHOS fork | 兄弟团队仓（GitHub `Eulogizethesun` 系十仓，外发分支统一 `ohdev-git`），**只消费不修改**。根 `Cargo.toml` 的 `[patch.crates-io]` 16 条 git 重定向 + openh264-sys2 vendor path——cargo 自动拉取，**无需本地 tauri 源码树**。当前锁 `73bffac6f`（内部提速备选：换 path 指向 `../../tauri-3.0` checkout，版本面与 ohdev-git 分支一致） |
 | tauri-cli（OHOS 版） | `cargo install --git https://github.com/Eulogizethesun/tauri --branch ohdev-git --locked tauri-cli`（crates.io 发行版无 OHOS 支持） |
 | ohrs | `cargo install ohrs --version 1.3.1`（tauri-cli 内部调用它编 `.so`） |
 | DevEco Studio | SDK clang（`CC/CXX_aarch64_unknown_linux_ohos`）、NDK `libc++_shared.so`、libclang（bindgen 用） |
@@ -107,22 +112,40 @@ artcraft 当年靠其 out/build 恰好有空 `crypto/`+`ssl/` 目录蒙混过关
 mkdir -p target/aarch64-unknown-linux-ohos/release/build/boring-sys2-<hash>/out/build/{crypto,ssl}
 ```
 
-target 清理后需重建（空目录即可）。
+两步法定位 `<hash>`（目录名含构建指纹，无法预知）：先跑一次 §构建配方，等 panic
+报出完整缺失路径（`.../boring-sys2-<hash>/out/build/crypto/ ... not found`），照抄
+该路径 mkdir 空目录后重跑。target 清理后需重补。
 
 ### 构建后必做：注入 libc++_shared.so（白屏根因）
 
 `libartcraftx_app_lib.so` 因 `BORING_BSSL_RUST_CPPLIB=c++` 带 `DT_NEEDED
-libc++_shared.so`，OHOS 不随包提供 → 缺库 = 模块加载失败 = 白屏。注入点必须选
-**`gen/ohos/tauri/libs/arm64-v8a/`**（@tauri/app HAR 模块目录，经 HAR 依赖链随 entry 打进
-HAP）。**不要**放 `entry_desktop/libs/`（构建被 `ohrs --dist` 同步删除）或 `dialog/libs/`
-（被 tauri-cli 重建删除）。首次构建创建 `gen/ohos/tauri` 后才能注入。
+libc++_shared.so`，OHOS 不随包提供 → 缺库 = 模块加载失败 = 白屏。**注入点必须选
+dialog 插件【源】目录**（本仓已带）：
+
+```bash
+cp "<SDK>/openharmony/native/llvm/lib/aarch64-linux-ohos/libc++_shared.so" \
+   crates/artcraftx/plugins/dialog/openharmony/libs/arm64-v8a/
+```
+
+原理：tauri-cli 每次构建把该目录整树重拷到 `gen/ohos/dialog/`（只跳 `.tauri`/`target`），
+HAR 模块根的 `libs/arm64-v8a/` 是 hvigor 自动打包约定——libc++ 随 HAR 打进 HAP，
+对 tauri-build 同步行为免疫。复核：`unzip -l <hap> | grep libc++` 应见
+`libc++_shared.so`（1,262,504 B）与 `libartcraftx_app_lib.so` 并存。
+
+**`gen/ohos/tauri/libs/` 通道已失效**（2026-11-09 实证）：fork `73bffac6f` 起
+tauri-build 的 `sync_ohos_tauri_module` 在**每次 Rust 构建**把 `gen/ohos/tauri`
+镜像回 `crates/tauri/mobile/ohos` 模板并剪枝多余文件——git 依赖模式同样触发
+（旧结论「git 模式无 sync」作废），注入即被清 = 装机白屏。`entry_desktop/libs/`
+（`ohrs --dist` 同步删除）与 gen 侧 `dialog/libs/`（整树重拷覆盖）同样不可用。
 
 ### init 后必做的手工修正（gen/ 不入库，重建即重打）
 
-**用 ohdev-git 版 tauri-cli（§前置依赖的安装命令）init 时，只剩一处**：
+**用 ohdev-git 版 tauri-cli（§前置依赖的安装命令）init 时，只剩两处**：
 
-1. `libc++_shared.so` 注入（见上节）——fresh init 已实证（2026-11-03）：模板的
-   `gen/ohos/tauri/` HAR 模块不带 `libs/`，注入点仍需手工创建。
+1. `libc++_shared.so` 注入（见上节 dialog 源目录通道）。
+2. boring-sys2 幽灵目录（见上节两步法；本仓当前 hash
+   `boring-sys2-81f8e7289d3c6aa4`，与 artcraft 的 `80aba92a579f68dd` 不同——
+   依赖图差异所致，target 清理后重跑两步法即可）。
 
 两处旧坑在 ohdev-git CLI（`46a19d8d` 起）已由模板根治，**新 init 不需要再做**：
 
